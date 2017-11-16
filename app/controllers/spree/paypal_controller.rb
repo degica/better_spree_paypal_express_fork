@@ -33,7 +33,22 @@ module Spree
       begin
         pp_response = provider.set_express_checkout(pp_request)
         if pp_response.success?
-          redirect_to provider.express_checkout_url(pp_response, :useraction => 'commit')
+          payment_source = Spree::PaypalExpressCheckout.create({
+                                                         :state => 'processing',
+                                                         :token => pp_response.token,
+                                                       }, :without_protection => true)
+          order = current_order || raise(ActiveRecord::RecordNotFound)
+          order.payments.create!({
+                                   :source => payment_source,
+                                   :amount => order.total,
+                                   :payment_method => payment_method
+                                 }, :without_protection => true)
+          order.next
+          if order.complete?
+            redirect_to provider.express_checkout_url(pp_response, :useraction => 'commit')
+          else
+            redirect_to checkout_state_path(:payment)
+          end
         else
           flash[:error] = t('flash.generic_error', :scope => 'paypal', :reasons => pp_response.errors.map(&:long_message).join(" "))
           redirect_to checkout_state_path(:payment)
