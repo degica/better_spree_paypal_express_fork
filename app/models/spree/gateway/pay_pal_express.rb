@@ -30,11 +30,15 @@ module Spree
     end
 
     def auto_capture?
-      true
+      false
     end
 
     def method_type
       'paypal'
+    end
+
+    def authorize(amount, express_checkout, gateway_options={})
+      return Struct.new(:success?, :authorization).new(true)
     end
 
     def purchase(amount, express_checkout, gateway_options={})

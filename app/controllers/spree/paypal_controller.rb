@@ -33,7 +33,23 @@ module Spree
       begin
         pp_response = provider.set_express_checkout(pp_request)
         if pp_response.success?
-          redirect_to provider.express_checkout_url(pp_response, :useraction => 'commit')
+          order = current_order || raise(ActiveRecord::RecordNotFound)
+          payment_source = Spree::PaypalExpressCheckout.create({
+                                                         :state => 'processing',
+                                                         :token => pp_response.token,
+                                                         :order_number => order.number
+                                                       }, :without_protection => true)
+          order.payments.create!({
+                                   :source => payment_source,
+                                   :amount => order.total,
+                                   :payment_method => payment_method
+                                 }, :without_protection => true)
+          order.next
+          if order.complete?
+            redirect_to provider.express_checkout_url(pp_response, :useraction => 'commit')
+          else
+            redirect_to checkout_state_path(:payment)
+          end
         else
           flash[:error] = t('flash.generic_error', :scope => 'paypal', :reasons => pp_response.errors.map(&:long_message).join(" "))
           redirect_to checkout_state_path(:payment)
@@ -45,21 +61,20 @@ module Spree
     end
 
     def confirm
-      order = current_order || raise(ActiveRecord::RecordNotFound)
-      order.payments.create!({
-        :source => Spree::PaypalExpressCheckout.create({
-          :token => params[:token],
-          :payer_id => params[:PayerID]
-        }, :without_protection => true),
-        :amount => order.total,
-        :payment_method => payment_method
-      }, :without_protection => true)
-      order.next
-      if order.complete?
-        flash.notice = t(:order_processed_successfully)
-        flash[:commerce_tracking] = "nothing special"
-        session[:order_id] = nil
-        redirect_to order_path(order, :token => order.token)
+      if payment_source = Spree::PaypalExpressCheckout.where(token: params[:token]).first
+        payment_source.update_attributes({
+                                          payer_id: params[:PayerID],
+                                          state: 'complete'
+                                        }, without_protection: true)
+        if order = Spree::Order.by_number(payment_source.order_number).first
+          order.payment.purchase!
+          flash.notice = t(:order_processed_successfully)
+          flash[:commerce_tracking] = "nothing special"
+          session[:order_id] = nil
+          redirect_to order_path(order, :token => order.token)
+        else
+          redirect_to checkout_state_path(order.state)
+        end
       else
         redirect_to checkout_state_path(order.state)
       end
